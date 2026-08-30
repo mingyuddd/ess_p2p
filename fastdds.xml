@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS 网络白名单配置（解决多网卡 + IPv6 导致的 ROS2 节点发现失败）
+
+  使用：启动前
+      export FASTRTPS_DEFAULT_PROFILES_FILE=/home/smy/wheel_ess/fastdds.xml
+
+  原理：把 DDS 通信限定到 interfaceWhiteList 指定的网卡，且只用 UDPv4
+        （禁用 IPv6 参与），避免两个网卡各自多播、互相看不见。
+
+  ⚠️ 地址选择（关键）：
+      白名单必须填**本机当前网卡 IP**（`ip addr` 查，网段/接口变化后要同步改）。
+      当前：本机（客户端）= WiFi 192.168.50.115。
+      目标机：在目标机上放一份相同文件，白名单填**目标机自己**的 IP（192.168.50.1）。
+      两机必须处于同一网段（192.168.50.0/24），且路由器不能开 AP 隔离。
+      换网络（热点/有线）后 IP 会变，记得同步更新两机各自的白名单。
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <transport_descriptors>
+        <transport_descriptor>
+            <transport_id>CustomUDPTransport</transport_id>
+            <type>UDPv4</type>
+            <interfaceWhiteList>
+                <address>192.168.50.115</address>
+            </interfaceWhiteList>
+        </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="participant_profile" is_default_profile="true">
+        <rtps>
+            <userTransports>
+                <transport_id>CustomUDPTransport</transport_id>
+            </userTransports>
+            <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>

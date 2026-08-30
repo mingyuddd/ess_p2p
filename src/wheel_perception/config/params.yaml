@@ -1,0 +1,151 @@
+/**:
+  ros__parameters:
+    # ==========================
+    # 1. AI 模型配置
+    # ==========================mmseg_modelb5.engine
+    camera:
+      type: "usb"            # zed | usb
+
+    ai:
+      engine_path: "src/wheel_perception/config/combined4.engine"
+      # engine_path: "src/wheel_perception/config/mmseg_modelb2.engine"
+      # engine_path: "src/wheel_perception/config/sealackcityb2.engine"
+    # ==========================
+    # 2. ZED 相机驱动配置
+    # ==========================
+    zed:
+      # sdk | ess | ess_remote
+      #   sdk        : ZED 相机 SDK 自带深度
+      #   ess        : 本机跑 ESS 深度模型（需要 CUDA/TRT 环境）
+      #   ess_remote : 双机模式 —— 本机发图，目标机跑 ESS 推理（见下方 ess_remote 段）
+      depth_source: "ess_remote"
+      resolution_id: 2      # 0=2K, 1=1080, 2=720, 3=VGA
+      fps: 60               # 帧率
+      depth_min: 0.3        # 最小深度 (米)
+      depth_max: 10.0        # 最大感测距离
+      flip_camera: false    # 是否倒装
+      depth_mode: 1         # 1=PERFORMANCE (快), 3=NEURAL (准)
+      coordinate_system: 3  # 3=RIGHT_HANDED_Z_UP_X_FWD (ROS标准坐标系: X前, Y左, Z上)
+      svo_path: ""          # 如果要回放SVO录像，填路径，否则留空
+      use_dataset_mode: false # 是否启用数据集模式 (从SVO或ROS话题读取数据，而非直接访问相机)
+
+    usb:
+      device: "/dev/v4l/by-id/usb-Generic_USB_Camera_YHTek-video-index0"
+      fourcc: "MJPG"
+      capture_width: 3840
+      capture_height: 1080
+      fps: 30.0
+      buffer_size: 1
+      output_width: 1280
+      output_height: 720
+      calibration_json: "src/wheel_perception/camera/stereo_calibration.json"
+      swap_left_right: true
+      require_calibration_size: true
+      rectify_alpha: 0.0
+      auto_reconnect: true
+      reconnect_interval_ms: 500
+      reconnect_warmup_frames: 3
+      controls:
+        brightness: -1
+        contrast: -1
+        saturation: -1
+        hue: -1
+        white_balance_automatic: -1
+        white_balance_temperature: -1
+        gamma: -1
+        gain: -1
+        power_line_frequency: -1
+        sharpness: -1
+        backlight_compensation: -1
+
+    ess:
+      engine_path: "src/wheel_perception/ess/light_ess.engine"
+      plugin_path: "src/wheel_perception/ess/plugins/x86_64/ess_plugins.so"
+      input_width: 480
+      input_height: 288
+      confidence_threshold: 0.5
+      min_depth_m: 0.3
+      max_depth_m: 10.0
+
+    # ==========================
+    # 2.5 远程 ESS 深度（双机模式, zed.depth_source=ess_remote）
+    # 本机（客户端）：拼接图 JPEG -> ess_remote/stereo_input
+    # 目标机（服务端）：推理 -> 深度 -> ess_remote/depth
+    # 注意：目标机 remote_ess_server 复用上方 ess 段（engine_path 等）
+    # 两台机器需要相同 ROS_DOMAIN_ID 且在同一局域网
+    # ==========================
+    ess_remote:
+      topics:
+        stereo_input: "ess_remote/stereo_input"
+        depth: "ess_remote/depth"
+        calibration: "ess_remote/calibration"
+      publish_interval_ms: 33   # 发图节流 (约 30Hz)
+      jpeg_quality: 85          # JPEG 压缩质量 (0-100)
+      stale_timeout_ms: 50000     # 深度回传超过该时长视为过期, 跳过点云融合
+
+    # ==========================
+    # 3. 感知核心参数
+    # ==========================
+    perception:
+      # --- 感知区域 (ROI) ---
+      # 注意：坐标系为 X前, Y左, Z上
+      roi:
+        min_x: 0.3          # 前方盲区 (小于此距离的点忽略)
+        max_x: 10.0          # 有效探测距离
+        min_y: -3.0         # [关键] 右侧边界 (对齐旧代码 if(y >= -0.4))
+        max_y: 3.0          # 左侧边界
+        min_z: -0.2         # 地面过滤 (去除地面点)
+        max_z: 2.0          # 高度上限
+
+      # --- 性能优化 ---
+      sample_step: 2        # 降采样 (2表示每隔1个点取1个，减少计算量)
+      voxel_size: 0.1      # [新增] 体素网格大小 (0.05 = 5cm)
+
+      # --- 几何避障逻辑 (椭圆方程) ---
+      # 判据: ellipse_x * x^2 + ellipse_y * y^2 < thres
+      obstacle:
+        ellipse_x: 6.0      # 对应旧代码 6.0
+        ellipse_y: 225.0    # 对应旧代码 225.0 (hpp默认是100，这里强制改为225以复刻旧效果)
+        thres: 50.0         # 阈值
+
+    # === LQR 控制参数 (严格对齐旧代码 avoid_lib_s.cpp) ===
+    lqr:
+      # [核心] 协议增益: 60.0
+      # 原因: 你的底层协议直接将输入与 143 相加。
+      # LQR 输出是微小的弧度(如0.1)，必须放大60倍才能驱动电机转向。
+      gain: 80.0   
+      
+      # 权重矩阵 Q 的对角线元素
+      q_pos: 10.0  # 位置误差权重 (q_dist -> q_pos)
+      q_ang: 10.0  # 角度误差权重 (q_yaw -> q_ang)
+      q_integral: 0.2      # 距离误差积分权重，用于消除斜坡/偏置造成的稳态误差
+      integral_limit: 1.5  # 积分限幅，防止长时间偏差后转向过冲
+      
+      # 模型参数
+      k_w: 10.0    # 对应 B 矩阵的增益
+      model_v: 0.5 # [关键] 内部模型速度 (旧代码写死为 0.5)
+      
+      # 目标设定
+      aim_dist: 1.0 # 目标离墙距离 (米)，让车不要贴墙太近
+
+    # === 动态右侧目标距离 ===
+    dynamic_aim:
+      enabled: false
+      ratio: 0.35          # target_right_distance = road_width * ratio
+      min_dist: 0.65       # 窄路时最小右侧安全距离
+      max_dist: 1.0        # 宽路时仍限制靠右，不继续向道路中心移动
+      fallback_dist: 1.0   # 左侧边界长期不可用时的回退目标距离
+      min_width: 1.0       # 合法道路宽度下限
+      max_width: 15.0       # 合法道路宽度上限，覆盖约 6 米的宽路场景
+      max_target_step: 0.05 # 每帧目标距离最大变化，抑制控制跳变
+      hold_frames: 10      # 左侧短时失效时保持上一可信目标的帧数
+
+    # === 逻辑状态机参数 ===
+    logic:
+      base_vel: 1.0      # 正常巡线速度 (m/s)
+      stop_dist: 1.0     # 紧急停车距离 (m)
+      
+      # 避障回正参数
+      pass_clearance: 0.1 # 盲走直行阶段：超过障碍物多少米后，才开始回正？（不依赖里程计，按时间估算距离）
+      straight_speed_est: 0.8  # 直行阶段估算车速 (m/s)：距离 = 车速 × 直行时长
+      recover_time: 1.5   # 强力回正阶段：持续右转多少秒？
